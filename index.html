@@ -131,5 +131,50 @@ createOrderRecord=function(sendWhatsapp){
   return result;
 };
 
+
+function repairWhatsappText(value){
+  let text=repairText(String(value||'')).replace(/\r\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+  if(!text.includes('\ufffd'))return text;
+  const orderSeq=[wEmoji.smile,wEmoji.box,wEmoji.money,wEmoji.pin,wEmoji.truck,wEmoji.spark];
+  const indriveSeq=[wEmoji.truck,wEmoji.smile,wEmoji.person,wEmoji.moto,wEmoji.money];
+  const seq=/Producto:|Total a pagar|Direcci[oó]n:|Env[ií]o/.test(text)?orderSeq:/camino|datos de entrega|Placa|seguimiento/.test(text)?indriveSeq:[];
+  let i=0;
+  return text.replace(/\ufffd/g,()=>seq[i++]||'');
+}
+const whatsappNativeOpen=window.open.bind(window);
+function repairWhatsappUrl(url){
+  const raw=String(url||'');
+  if(!/whatsapp\.com|wa\.me/.test(raw))return raw;
+  try{
+    const u=new URL(raw,location.href);
+    let phone='';
+    let text='';
+    if(u.hostname.includes('wa.me')){
+      phone=u.pathname.replace(/\D/g,'');
+      text=decodeURIComponent((u.search.match(/[?&]text=([^&]*)/)||['',''])[1].replace(/\+/g,'%20'));
+    }else{
+      phone=(u.searchParams.get('phone')||'').replace(/\D/g,'');
+      text=u.searchParams.get('text')||'';
+    }
+    if(!phone)return raw;
+    return whatsappUrl(phone,repairWhatsappText(text));
+  }catch(_e){
+    return raw;
+  }
+}
+whatsappUrl=function(phone,text){
+  const cleanPhone=normalizeWhatsappPhone(phone);
+  const cleanText=repairWhatsappText(text);
+  return 'https://api.whatsapp.com/send/?phone='+cleanPhone+'&text='+encodeURIComponent(cleanText)+'&type=phone_number&app_absent=0';
+};
+openWhatsapp=function(phone,text){
+  const cleanPhone=normalizeWhatsappPhone(phone);
+  if(!cleanPhone){toast('El cliente no tiene telefono valido');return}
+  whatsappNativeOpen(whatsappUrl(cleanPhone,text),'_blank','noopener');
+};
+window.open=function(url,target,features){
+  return whatsappNativeOpen(repairWhatsappUrl(url),target,features);
+};
+
 initSupabaseApp();
 </script></body></html>
