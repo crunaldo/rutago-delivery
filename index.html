@@ -73,8 +73,9 @@ function cleanWhatsappTemplate(value,fallback){
   const text=repairText(String(value||''));
   return /[\u00c3\u00c2\ufffd]/.test(text)?fallback:text;
 }
-const defaultOrderWhatsappTemplate="¡Perfecto! 😊\n\nTe comparto el resumen de tu pedido:\n\n📦*Producto:*\n{items}\n\n💰*Total a pagar por el producto:* {productTotal}\n\n📍*Dirección:*\n{address}\n\n🚚 *Envío (aproximado variable en horas punta):* {deliveryFee}\nEl costo del envío se paga directamente al motorizado al momento de la entrega.\n\n✨ Total del producto a transferir: {productTotal}";
-const defaultIndriveWhatsappTemplate="🚚 *¡Tu pedido ya está en camino!* 😊\n\nTe compartimos los datos de entrega:\n\n{tracking}\n\n👤 *Nombre:* {driver}\n🏍️ *Placa:* {plate}\n💰 *Costo del envío:* {fee}\n\n_¡Esperamos que disfrutes mucho tu pedido!_";
+const wEmoji={smile:String.fromCodePoint(0x1f60a),box:String.fromCodePoint(0x1f4e6),money:String.fromCodePoint(0x1f4b0),pin:String.fromCodePoint(0x1f4cd),truck:String.fromCodePoint(0x1f69a),spark:String.fromCodePoint(0x2728),person:String.fromCodePoint(0x1f464),moto:String.fromCodePoint(0x1f3cd,0xfe0f)};
+const defaultOrderWhatsappTemplate="¡Perfecto! "+wEmoji.smile+"\n\nTe comparto el resumen de tu pedido:\n\n"+wEmoji.box+"*Producto:*\n{items}\n\n"+wEmoji.money+"*Total a pagar por el producto:* {productTotal}\n\n"+wEmoji.pin+"*Dirección:*\n{address}\n\n"+wEmoji.truck+" *Envío (aproximado variable en horas punta):* {deliveryFee}\nEl costo del envío se paga directamente al motorizado al momento de la entrega.\n\n"+wEmoji.spark+" Total del producto a transferir: {productTotal}";
+const defaultIndriveWhatsappTemplate=wEmoji.truck+" *¡Tu pedido ya está en camino!* "+wEmoji.smile+"\n\nTe compartimos los datos de entrega:\n\n{tracking}\n\n"+wEmoji.person+" *Nombre:* {driver}\n"+wEmoji.moto+" *Placa:* {plate}\n"+wEmoji.money+" *Costo del envío:* {fee}\n\n_¡Esperamos que disfrutes mucho tu pedido!_";
 function normalizeWhatsappPhone(phone){
   const digits=String(phone||'').replace(/\D/g,'');
   if(!digits)return '';
@@ -82,7 +83,7 @@ function normalizeWhatsappPhone(phone){
 }
 function whatsappUrl(phone,text){
   const cleanPhone=normalizeWhatsappPhone(phone);
-  const cleanText=repairText(String(text||'')).replace(/\r\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+  const cleanText=repairText(String(text||'')).replace(/\ufffd/g,'').replace(/\r\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
   return 'https://wa.me/'+cleanPhone+'?text='+encodeURIComponent(cleanText);
 }
 function openWhatsapp(phone,text){
