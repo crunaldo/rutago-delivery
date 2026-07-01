@@ -68,5 +68,67 @@ function ensureCancelOrderButton(){if(document.getElementById('cancelOrderBtn'))
 function updateCancelOrderButton(){ensureCancelOrderButton();const o=state.orders.find(x=>x.id===editingOrderId);cancelOrderBtn.style.display=o&&!['delivered','cancelled'].includes(o.status)?'inline-flex':'none'}
 async function cancelCurrentOrder(){const o=state.orders.find(x=>x.id===editingOrderId);if(!o)return;if(!requireRole(['admin','atencion','caja']))return;const reason=prompt('Motivo de cancelación del pedido')||'Cancelado desde el panel';if(!confirm('¿Cancelar el pedido '+o.id+'?'))return;try{if(dbReady()){await sbThrow(sb.from('orders').update({status:'cancelled',payment_status:'cancelled',last_status_reason:reason,updated_by:currentProfile.id}).eq('id',o._dbId));dialog.close();await loadRemoteDataAndRender()}else{o.status='cancelled';o.notes=(o.notes||'')+'\\nCancelado: '+reason;save();dialog.close();render()}toast('Pedido '+o.id+' cancelado')}catch(err){console.error(err);toast(err.message||'No se pudo cancelar el pedido')}}
 const cancelOpenDialog=openDialog;openDialog=function(){cancelOpenDialog();updateCancelOrderButton()};const cancelEditOrder=editOrder;editOrder=function(id){cancelEditOrder(id);updateCancelOrderButton()};
+
+function cleanWhatsappTemplate(value,fallback){
+  const text=repairText(String(value||''));
+  return /[\u00c3\u00c2\ufffd]/.test(text)?fallback:text;
+}
+const defaultOrderWhatsappTemplate="¡Perfecto! 😊\n\nTe comparto el resumen de tu pedido:\n\n📦*Producto:*\n{items}\n\n💰*Total a pagar por el producto:* {productTotal}\n\n📍*Dirección:*\n{address}\n\n🚚 *Envío (aproximado variable en horas punta):* {deliveryFee}\nEl costo del envío se paga directamente al motorizado al momento de la entrega.\n\n✨ Total del producto a transferir: {productTotal}";
+const defaultIndriveWhatsappTemplate="🚚 *¡Tu pedido ya está en camino!* 😊\n\nTe compartimos los datos de entrega:\n\n{tracking}\n\n👤 *Nombre:* {driver}\n🏍️ *Placa:* {plate}\n💰 *Costo del envío:* {fee}\n\n_¡Esperamos que disfrutes mucho tu pedido!_";
+function normalizeWhatsappPhone(phone){
+  const digits=String(phone||'').replace(/\D/g,'');
+  if(!digits)return '';
+  return digits.startsWith('51')?digits:'51'+digits;
+}
+function whatsappUrl(phone,text){
+  const cleanPhone=normalizeWhatsappPhone(phone);
+  const cleanText=repairText(String(text||'')).replace(/\r\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+  return 'https://wa.me/'+cleanPhone+'?text='+encodeURIComponent(cleanText);
+}
+function openWhatsapp(phone,text){
+  const cleanPhone=normalizeWhatsappPhone(phone);
+  if(!cleanPhone){toast('El cliente no tiene teléfono válido');return}
+  window.open(whatsappUrl(cleanPhone,text),'_blank','noopener');
+}
+buildWhatsapp=function(order){
+  const cust=c(order);
+  const sourceItems=productCounts(order.productIds);
+  const items=sourceItems.map(item=>{
+    const p=state.products.find(x=>x.id===item.productId);
+    return '- '+item.qty+' x '+(p?.name||'Producto')+' = '+money.format(item.qty*(p?.price||0));
+  }).join('\n');
+  const template=cleanWhatsappTemplate(state.settings.templates?.order,defaultOrderWhatsappTemplate);
+  return template.replaceAll('{cliente}',cust.name||'').replaceAll('{pedido}',order.id||'').replaceAll('{items}',items).replaceAll('{productTotal}',money.format(total(order))).replaceAll('{deliveryFee}',money.format(order.fee||0)).replaceAll('{address}',order.address||'').replaceAll('{payment}',order.payment||'').replaceAll('{total}',money.format(total(order)));
+};
+buildIndriveWhatsapp=function(order){
+  const delivery=order.indrive||{};
+  const template=cleanWhatsappTemplate(state.settings.templates?.indrive,defaultIndriveWhatsappTemplate);
+  return template.replaceAll('{tracking}',delivery.tracking||'Seguimiento no disponible').replaceAll('{driver}',delivery.name||'').replaceAll('{plate}',delivery.plate||'').replaceAll('{fee}',money.format(order.fee||0));
+};
+const whatsappCreateOrderRecord=createOrderRecord;
+createOrderRecord=function(sendWhatsapp){
+  const beforeOpen=window.open;
+  const restoreOpen=()=>{window.open=beforeOpen};
+  if(sendWhatsapp){
+    window.open=(url,target,features)=>{
+      try{
+        const raw=String(url||'');
+        const match=raw.match(/https:\/\/wa\.me\/([^?]+)\?text=(.*)$/);
+        if(match){
+          beforeOpen.call(window,whatsappUrl(match[1],decodeURIComponent(match[2]||'')),target||'_blank',features||'noopener');
+          return null;
+        }
+      }finally{
+        restoreOpen();
+      }
+      return beforeOpen.call(window,url,target,features);
+    };
+  }
+  const result=whatsappCreateOrderRecord(sendWhatsapp);
+  if(sendWhatsapp&&result&&typeof result.finally==='function')return result.finally(restoreOpen);
+  if(sendWhatsapp)restoreOpen();
+  return result;
+};
+
 initSupabaseApp();
 </script></body></html>
