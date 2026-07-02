@@ -319,5 +319,225 @@ document.body.addEventListener('click',async e=>{
   await regressOrder(btn.dataset.id);
 },true);
 
+
+function localDateKey(ts){
+  const d=new Date(ts);
+  const y=d.getFullYear();
+  const m=String(d.getMonth()+1).padStart(2,'0');
+  const day=String(d.getDate()).padStart(2,'0');
+  return y+'-'+m+'-'+day;
+}
+function todayKey(){return localDateKey(Date.now())}
+function isTodayOrder(order){return localDateKey(order.createdAt)===todayKey()}
+function posOrders(){
+  return orders().filter(isTodayOrder);
+}
+function paged(key,items,size){
+  window.rutagoPages=window.rutagoPages||{};
+  const page=Math.max(1,window.rutagoPages[key]||1);
+  const pages=Math.max(1,Math.ceil(items.length/size));
+  const current=Math.min(page,pages);
+  window.rutagoPages[key]=current;
+  return {items:items.slice((current-1)*size,current*size),page:current,pages,total:items.length,size};
+}
+function ensurePager(id,afterEl){
+  let el=document.getElementById(id);
+  if(!el){
+    afterEl.insertAdjacentHTML('afterend','<div class="pager" id="'+id+'"></div>');
+    el=document.getElementById(id);
+  }
+  return el;
+}
+function renderPager(id,key,page){
+  const el=document.getElementById(id);
+  if(!el)return;
+  if(page.total<=page.size){el.innerHTML='';return}
+  el.innerHTML='<button class="btn" type="button" data-page-key="'+key+'" data-page-dir="-1">Anterior</button><span>'+page.page+' / '+page.pages+' · '+page.total+' registros</span><button class="btn" type="button" data-page-key="'+key+'" data-page-dir="1">Siguiente</button>';
+}
+function visibleOrdersForTable(){
+  return filteredOrderRows().filter(o=>tab==='all'||(tab==='completed'?o.status==='delivered':tab==='cancelled'?o.status==='cancelled':!['delivered','cancelled'].includes(o.status)));
+}
+function emptyRow(target,cols,text){
+  target.innerHTML='<tr><td colspan="'+cols+'"><span class="muted">'+text+'</span></td></tr>';
+}
+metrics=function(){
+  const today=state.orders.filter(isTodayOrder);
+  const active=today.filter(o=>!['delivered','cancelled'].includes(o.status));
+  document.getElementById('mRevenue').textContent=money.format(today.filter(o=>o.status!=='cancelled').reduce((s,o)=>s+total(o),0));
+  document.getElementById('mTime').textContent=Math.round(active.reduce((s,o)=>s+elapsedMinutes(o),0)/Math.max(active.length,1))+' min';
+  document.getElementById('mActive').textContent=active.length;
+  document.getElementById('mLate').textContent=active.filter(late).length;
+};
+kanban=function(){
+  const b=document.getElementById('kanban');
+  b.innerHTML='';
+  state.board.lanes.filter(x=>x.enabled).forEach(cfg=>{
+    const l=cfg.status;
+    const list=posOrders().filter(o=>o.status===l&&(filter==='all'||filter==='late'&&late(o)||filter===o.status));
+    const lane=document.createElement('div');
+    lane.className='lane';
+    lane.innerHTML='<h3>'+cfg.title+'<span class="count">'+list.length+'</span></h3>';
+    list.forEach(o=>lane.append(orderCard(o)));
+    b.append(lane);
+  });
+};
+table=function(){
+  const body=document.getElementById('ordersBody');
+  const list=visibleOrdersForTable();
+  const page=paged('orders',list,15);
+  ensurePager('ordersPager',document.querySelector('#orders .tablewrap'));
+  body.innerHTML='';
+  if(!list.length){
+    emptyRow(body,8,'No hay pedidos para los filtros seleccionados.');
+    renderPager('ordersPager','orders',page);
+    return;
+  }
+  page.items.forEach(o=>{
+    body.insertAdjacentHTML('beforeend','<tr data-order="'+o.id+'"><td><strong>'+o.id+'</strong><br><span class="muted">'+o.channel+'</span></td><td>'+c(o).name+'<br><span class="muted">'+c(o).phone+'</span></td><td>'+o.zone+'</td><td><span class="pill '+(late(o)?'red':meta[o.status].color)+'">'+(late(o)?'Retraso':meta[o.status].label)+'</span></td><td>'+(o.indrive?('InDrive: '+o.indrive.name+'<br><span class="muted">'+o.indrive.plate+(o.indrive.tracking?' · seguimiento':'')+'</span>'):'Sin InDrive')+'</td><td>'+money.format(total(o))+'</td><td>'+elapsedLabel(o)+'</td><td><button class="btn" data-action="advance" data-id="'+o.id+'">'+nextActionLabel(o)+'</button></td></tr>');
+  });
+  renderPager('ordersPager','orders',page);
+};
+map=function(){
+  const cols=[10,42,70,24,56,78],rows=[18,14,36,58,66,50];
+  document.getElementById('map').innerHTML=zoneNames.map((z,i)=>{
+    const active=state.orders.filter(o=>isTodayOrder(o)&&o.zone===z&&!['delivered','cancelled'].includes(o.status));
+    const status=active.some(late)?'late':active.length>1?'busy':'ok';
+    return '<div class="zone '+status+'" style="left:'+cols[i%cols.length]+'%;top:'+rows[i%rows.length]+'%"><strong>'+z+'</strong><small>'+active.length+' activos hoy</small></div>';
+  }).join('');
+};
+drivers=function(){
+  const active=state.orders.filter(o=>(o.status==='route'||o.indrive)&&isTodayOrder(o));
+  const page=paged('drivers',active,12);
+  ensurePager('driversPager',document.getElementById('driversGrid'));
+  document.getElementById('driversGrid').innerHTML=active.length?page.items.map(o=>'<article class="driver indrive-card" data-tracking-order="'+o.id+'"><div class="driverTop"><div class="avatar">ID</div><span class="pill '+(o.status==='delivered'?'green':'blue')+'">'+meta[o.status].label+'</span></div><h2>'+o.id+'</h2><p>'+c(o).name+' · '+o.zone+'</p><p>'+(o.indrive?('InDrive: '+o.indrive.name+' · '+o.indrive.plate):'Aún sin datos de InDrive')+'</p>'+(o.indrive?.tracking?'<span class="delivery-link">Ver seguimiento</span>':'')+'<div class="progress"><span style="width:'+(o.status==='delivered'?100:65)+'%"></span></div><strong>'+money.format(total(o))+'</strong></article>').join(''):'<section class="panel"><h2>Sin envíos InDrive activos hoy</h2><p>Cuando un pedido de hoy pase a En camino aparecerá aquí.</p></section>';
+  renderPager('driversPager','drivers',page);
+};
+customers=function(){
+  const list=state.customers;
+  const page=paged('customers',list,15);
+  ensurePager('customersPager',document.querySelector('#customers .tablewrap'));
+  customersBody.innerHTML=page.items.map(x=>{const os=state.orders.filter(o=>o.customerId===x.id);return '<tr data-customer-row="'+x.id+'"><td><strong>'+x.name+'</strong></td><td>'+x.phone+'</td><td>'+x.address+'</td><td>'+os.length+'</td><td>'+money.format(os.reduce((s,o)=>s+total(o),0))+'</td><td>'+x.notes+'</td></tr>'}).join('');
+  if(!list.length)emptyRow(customersBody,6,'Sin clientes registrados.');
+  renderPager('customersPager','customers',page);
+};
+catalog=function(){
+  const products=state.products;
+  const page=paged('catalog',products,12);
+  ensurePager('catalogPager',document.getElementById('productGrid'));
+  productGrid.innerHTML=page.items.map(p=>'<button class="product '+(p.id===selectedProduct?'active':'')+'" data-product="'+p.id+'"><p>'+p.category+'</p><h2>'+p.name+'</h2><strong>'+money.format(p.price)+'</strong><br><span class="pill '+(p.available?'green':'red')+'">'+(p.available?'Disponible':'Pausado')+'</span></button>').join('');
+  const p=state.products.find(x=>x.id===selectedProduct)||state.products[0];
+  if(p){selectedProduct=p.id;productName.value=p.name;productCategory.value=p.category;productPrice.value=p.price;productAvailable.checked=p.available}
+  renderPager('catalogPager','catalog',page);
+  fillProducts();
+};
+const oldRenderCashPaged=renderCash;
+renderCash=function(){
+  oldRenderCashPaged();
+  const rows=[...paymentsBody.querySelectorAll('tr')];
+  if(rows.length>12){
+    const page=paged('payments',rows,12);
+    rows.forEach((row,i)=>row.style.display=i>=(page.page-1)*page.size&&i<page.page*page.size?'':'none');
+    ensurePager('paymentsPager',document.querySelector('#cash .tablewrap'));
+    renderPager('paymentsPager','payments',page);
+  }
+};
+const oldRenderUsersPaged=renderUsersPanel;
+renderUsersPanel=function(){
+  oldRenderUsersPaged();
+  if(!window.usersBody)return;
+  const rows=[...usersBody.querySelectorAll('tr')];
+  if(rows.length>12){
+    const page=paged('users',rows,12);
+    rows.forEach((row,i)=>row.style.display=i>=(page.page-1)*page.size&&i<page.page*page.size?'':'none');
+    ensurePager('usersPager',document.querySelector('#users .tablewrap')||document.querySelector('#userAdminPanel .tablewrap'));
+    renderPager('usersPager','users',page);
+  }
+};
+function setupOrdersAllTab(){
+  const tabs=document.getElementById('orderTabs');
+  if(tabs&&!tabs.querySelector('[data-tab="all"]')){
+    tabs.insertAdjacentHTML('afterbegin','<button data-tab="all" type="button">Todos</button>');
+    tab='all';
+    tabs.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.tab==='all'));
+  }
+}
+function resetPagination(keys){
+  window.rutagoPages=window.rutagoPages||{};
+  keys.forEach(k=>window.rutagoPages[k]=1);
+}
+document.body.addEventListener('click',e=>{
+  const btn=e.target.closest('[data-page-key]');
+  if(!btn)return;
+  const key=btn.dataset.pageKey;
+  window.rutagoPages=window.rutagoPages||{};
+  window.rutagoPages[key]=Math.max(1,(window.rutagoPages[key]||1)+Number(btn.dataset.pageDir||0));
+  render();
+  renderCash();
+  renderUsersPanel();
+});
+const oldRefreshOrderFilters=refreshOrderFilters;
+refreshOrderFilters=function(){resetPagination(['orders']);oldRefreshOrderFilters()};
+const oldSearchInput=search.oninput;
+search.oninput=()=>{resetPagination(['orders','drivers']);oldSearchInput()};
+const oldOrderTabsClick=orderTabs.onclick;
+orderTabs.onclick=e=>{resetPagination(['orders']);oldOrderTabsClick(e)};
+function svgIcon(name){
+  const icons={
+    dashboard:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',
+    orders:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10l2 3v13H5V7z"/><path d="M8 10h8M8 14h8M8 18h5"/></svg>',
+    pos:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="12"/><path d="M8 20h8M9 8h6M9 12h3"/></svg>',
+    drivers:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17h16l-2-7H6z"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/><path d="M7 10V6h7l3 4"/></svg>',
+    customers:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="4"/><path d="M3 21c1-5 11-5 12 0"/><circle cx="17" cy="10" r="3"/><path d="M15 21c.5-2 2-3 5-3"/></svg>',
+    catalog:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="7" cy="6" r="1"/><circle cx="7" cy="12" r="1"/><circle cx="7" cy="18" r="1"/></svg>',
+    reports:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V5"/><rect x="8" y="12" width="3" height="7"/><rect x="13" y="8" width="3" height="11"/><rect x="18" y="4" width="3" height="15"/></svg>',
+    settings:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M19.1 4.9l-2.8 2.8M7.7 16.3l-2.8 2.8"/></svg>',
+    cash:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12"/><circle cx="12" cy="12" r="3"/><path d="M6 9v6M18 9v6"/></svg>',
+    users:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M3 21c1-4 9-4 10 0M11 21c1-4 8-4 10 0"/></svg>',
+    search:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/></svg>',
+    refresh:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v6h-6"/></svg>',
+    box:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8-4 8 4-8 4z"/><path d="M4 7v10l8 4 8-4V7"/><path d="M12 11v10"/></svg>',
+    clock:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg>',
+    alert:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 9v5M12 17h.01"/></svg>'
+  };
+  return icons[name]||icons.orders;
+}
+iconFor=function(view){return svgIcon(view)};
+function enhanceIconography(){
+  document.querySelector('.search')?.firstChild?.remove();
+  if(document.querySelector('.search')&&!document.querySelector('.search svg'))document.querySelector('.search').insertAdjacentHTML('afterbegin',svgIcon('search'));
+  reset.innerHTML=svgIcon('refresh');
+  document.querySelectorAll('.mi.blue').forEach(el=>el.innerHTML=svgIcon('box'));
+  document.querySelectorAll('.mi.yellow').forEach(el=>el.innerHTML=svgIcon('clock'));
+  document.querySelectorAll('.mi.red').forEach(el=>el.innerHTML=svgIcon('alert'));
+}
+const iconStyle=document.createElement('style');
+iconStyle.textContent='.nav svg,.search svg,.icon svg,.mi svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.nav svg rect,.nav svg circle,.mi svg rect,.mi svg circle{fill:none}.pager{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:12px;color:var(--muted);font-size:13px}.pager .btn{height:34px}.order-title{display:inline-flex;align-items:center;gap:6px}.order-title .icon.small{width:28px;height:28px;flex:0 0 28px}.nav button{gap:12px}';
+document.head.appendChild(iconStyle);
+const oldRenderWithIcons=render;
+render=function(){
+  setupOrdersAllTab();
+  oldRenderWithIcons();
+  setupOrdersAllTab();
+  enhanceIconography();
+};
+setupOrdersAllTab();
+enhanceIconography();
+
+
+function renderMenuWithSvgIcons(){
+  const nav=document.querySelector('.nav');
+  if(!nav)return;
+  const menu=(state.settings.menu||[]).filter(m=>m.visible!==false).filter(m=>typeof roleCanView!=='function'||roleCanView(m.view));
+  nav.innerHTML=menu.map(m=>'<button data-view="'+m.view+'">'+svgIcon(m.view)+'<span>'+m.label+'</span></button>').join('');
+  nav.querySelectorAll('button').forEach(b=>b.onclick=()=>setView(b.dataset.view));
+  nav.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.view===currentView));
+}
+const previousRenderMenuForSvg=renderMenu;
+renderMenu=function(){
+  previousRenderMenuForSvg();
+  renderMenuWithSvgIcons();
+};
+renderMenuWithSvgIcons();
+
 initSupabaseApp();
 </script></body></html>
