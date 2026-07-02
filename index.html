@@ -49,7 +49,7 @@ async function saveRemoteSettings(){const store={shopName:state.settings.shopNam
 async function ensureCustomerAndAddress(){let cust=selectedCustomerId?remoteRows.customers.find(c=>c.id===selectedCustomerId):remoteRows.customers.find(c=>c.phone===oPhone.value.trim());if(cust){cust=(await sbThrow(sb.from('customers').update({name:oCustomer.value.trim(),phone:oPhone.value.trim(),notes:cust.notes||''}).eq('id',cust.id).select()))[0]}else{cust=(await sbThrow(sb.from('customers').insert({name:oCustomer.value.trim(),phone:oPhone.value.trim(),notes:'Nuevo cliente'}).select()))[0]}let addr=(remoteRows.addresses||[]).find(a=>a.customer_id===cust.id&&a.address===oAddress.value.trim());if(!addr){addr=(await sbThrow(sb.from('customer_addresses').insert({customer_id:cust.id,address:oAddress.value.trim(),zone_id:zoneId(oZone.value),is_primary:true}).select()))[0]}return {cust,addr}}
 async function remoteCreateOrUpdateOrder(sendWhatsapp){if(!orderForm.reportValidity())return;if(!cartItems.length){toast('Agrega al menos un producto');return}const {cust,addr}=await ensureCustomerAndAddress();const payload={customer_id:cust.id,address_id:addr.id,zone_id:zoneId(oZone.value),channel:oChannel.value,payment_method:oPayment.value,notes:oNotes.value,delivery_fee:Number(oFee.value||0),delivery_paid_to_store:oDeliveryPaid.checked,target_minutes:Number(state.settings.targetTime||38),updated_by:currentProfile.id};let row;if(editingOrderId){const existing=state.orders.find(o=>o.id===editingOrderId);row=(await sbThrow(sb.from('orders').update(payload).eq('id',existing._dbId).select()))[0];await sbThrow(sb.from('order_items').delete().eq('order_id',row.id))}else{payload.order_number=nextOrderId();payload.status='received';payload.created_by=currentProfile.id;row=(await sbThrow(sb.from('orders').insert(payload).select()))[0]}const grouped=cartItems.map(item=>{const p=productRow(item.productId);return {order_id:row.id,product_id:item.productId,product_name:p?.name||'Producto',quantity:item.qty,unit_price:Number(p?.price||0)}});await sbThrow(sb.from('order_items').insert(grouped));await loadRemoteDataAndRender();dialog.close();const order=state.orders.find(o=>o._dbId===row.id);toast(editingOrderId?'Pedido actualizado':'Pedido creado');if(sendWhatsapp&&order){const phone=cust.phone.replace(/\\D/g,'');window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(buildWhatsapp(order)),'_blank')}}
 createOrderRecord=async function(sendWhatsapp){if(!dbReady())return remoteLoaded?toast('Sin sesión activa'):undefined;try{await remoteCreateOrUpdateOrder(sendWhatsapp)}catch(err){console.error(err);toast(err.message||'No se pudo guardar')}};
-advance=async function(id){if(!dbReady()){toast('Conecta Supabase primero');return}const o=state.orders.find(x=>x.id===id);if(!o)return;if(!meta[o.status].next){editOrder(id);return}const next=meta[o.status].next;if(next==='route'){openIndriveModal(o);return}const reason=prompt('Motivo del cambio de estado (opcional)')||'';try{await sbThrow(sb.from('orders').update({status:next,last_status_reason:reason,updated_by:currentProfile.id,completed_at:next==='delivered'?new Date().toISOString():null}).eq('id',o._dbId));await loadRemoteDataAndRender();toast('Pedido '+o.id+' actualizado')}catch(err){console.error(err);toast(err.message||'No se pudo actualizar')}};
+advance=async function(id){if(!dbReady()){toast('Conecta Supabase primero');return}const o=state.orders.find(x=>x.id===id);if(!o)return;if(!meta[o.status].next){editOrder(id);return}const next=meta[o.status].next;if(next==='route'){openIndriveModal(o);return}try{await sbThrow(sb.from('orders').update({status:next,last_status_reason:'Cambio de estado',updated_by:currentProfile.id,completed_at:next==='delivered'?new Date().toISOString():null}).eq('id',o._dbId));await loadRemoteDataAndRender();toast('Pedido '+o.id+' actualizado')}catch(err){console.error(err);toast(err.message||'No se pudo actualizar')}};
 confirmIndrive=async function(e,sendWhatsapp=false){e.preventDefault();if(!dbReady())return;const o=state.orders.find(x=>x.id===pendingRouteOrderId);if(!o)return;try{await sbThrow(sb.from('indrive_deliveries').upsert({order_id:o._dbId,driver_name:inDriverName.value.trim(),plate:inPlate.value.trim(),tracking_url:inTracking.value.trim(),delivery_cost:Number(o.fee||0),created_by:currentProfile.id},{onConflict:'order_id'}));await sbThrow(sb.from('orders').update({status:'route',updated_by:currentProfile.id,last_status_reason:'Datos InDrive registrados'}).eq('id',o._dbId));indriveDialog.close();pendingRouteOrderId='';await loadRemoteDataAndRender();const updated=state.orders.find(x=>x.id===o.id);toast('Pedido en camino con InDrive');if(sendWhatsapp&&updated){const phone=c(updated).phone.replace(/\\D/g,'');window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(buildIndriveWhatsapp(updated)),'_blank')}}catch(err){console.error(err);toast(err.message||'No se pudo guardar InDrive')}};
 createProduct=async function(e){e.preventDefault();if(!requireRole(['admin']))return;try{const row={name:npName.value.trim(),category:npCategory.value.trim(),price:Number(npPrice.value),available:npAvailable.checked};await sbThrow(sb.from('products').insert(row));productDialog.close();await loadRemoteDataAndRender();setView('catalog');toast('Producto creado')}catch(err){toast(err.message||'No se pudo crear producto')}};
 newProductForm.onsubmit=createProduct;
@@ -224,6 +224,100 @@ editOrder=function(id){
   if(oFee)oFee.step='0.01';
   renderOrderDeliveryDetails(order);
 };
+
+
+function previousOrderStatus(status){
+  return {ready:'received',route:'ready',delivered:'route'}[status]||'';
+}
+function orderCustomerPhone(order){
+  if(!order)return '';
+  const local=c(order)?.phone||'';
+  const remote=(remoteRows.customers||[]).find(customer=>customer.id===order.customerId);
+  return local||remote?.phone||'';
+}
+async function updateOrderStatusNoPrompt(order,status,reason=''){
+  if(!order)return;
+  if(dbReady()){
+    const payload={status,last_status_reason:reason,updated_by:currentProfile?.id||null,completed_at:status==='delivered'?new Date().toISOString():null};
+    await sbThrow(sb.from('orders').update(payload).eq('id',order._dbId));
+    await loadRemoteDataAndRender();
+  }else{
+    order.status=status;
+    order.completedAt=status==='delivered'?Date.now():null;
+    save();
+    render();
+  }
+}
+advance=async function(id){
+  const o=state.orders.find(x=>x.id===id);
+  if(!o)return;
+  if(!meta[o.status].next){editOrder(id);return}
+  const next=meta[o.status].next;
+  if(next==='route'){openIndriveModal(o);return}
+  try{
+    await updateOrderStatusNoPrompt(o,next,'Cambio de estado');
+    toast('Pedido '+o.id+' actualizado a '+meta[next].label);
+  }catch(err){
+    console.error(err);
+    toast(err.message||'No se pudo actualizar');
+  }
+};
+async function regressOrder(id){
+  const o=state.orders.find(x=>x.id===id);
+  const prev=previousOrderStatus(o?.status);
+  if(!o||!prev)return;
+  try{
+    await updateOrderStatusNoPrompt(o,prev,'Retorno de estado');
+    toast('Pedido '+o.id+' devuelto a '+meta[prev].label);
+  }catch(err){
+    console.error(err);
+    toast(err.message||'No se pudo devolver el pedido');
+  }
+}
+function backOrderButton(order){
+  return previousOrderStatus(order.status)?'<button class="icon small" type="button" data-action="back" data-id="'+order.id+'" title="Volver al estado anterior">‹</button>':'';
+}
+confirmIndrive=async function(e,sendWhatsapp=false){
+  e.preventDefault();
+  if(!dbReady())return;
+  const o=state.orders.find(x=>x.id===pendingRouteOrderId);
+  if(!o)return;
+  try{
+    await sbThrow(sb.from('indrive_deliveries').upsert({order_id:o._dbId,driver_name:inDriverName.value.trim(),plate:inPlate.value.trim(),tracking_url:inTracking.value.trim(),delivery_cost:Number(o.fee||0),created_by:currentProfile.id},{onConflict:'order_id'}));
+    await sbThrow(sb.from('orders').update({status:'route',updated_by:currentProfile.id,last_status_reason:'Datos InDrive registrados'}).eq('id',o._dbId));
+    indriveDialog.close();
+    pendingRouteOrderId='';
+    await loadRemoteDataAndRender();
+    const updated=state.orders.find(x=>x.id===o.id);
+    toast('Pedido en camino con InDrive');
+    if(sendWhatsapp&&updated){
+      openWhatsapp(orderCustomerPhone(updated)||orderCustomerPhone(o)||oPhone.value,buildIndriveWhatsapp(updated));
+    }
+  }catch(err){
+    console.error(err);
+    toast(err.message||'No se pudo guardar InDrive');
+  }
+};
+orderCard=function(o){
+  const cust=c(o);
+  const phone=orderCustomerPhone(o)||cust.phone||'';
+  const items=o.productIds.map(id=>state.products.find(p=>p.id===id)?.name).filter(Boolean).join(', ');
+  const e=document.createElement('article');
+  e.className='order '+(late(o)?'late':'');
+  e.dataset.order=o.id;
+  const phoneLine=phone?'<br><span class="muted">'+phone+'</span>':'';
+  const delivery=o.indrive?'<span class="delivery-line">InDrive: '+o.indrive.name+' &middot; '+o.indrive.plate+'</span>':'';
+  const back=backOrderButton(o);
+  e.innerHTML='<div class="row"><span class="order-title">'+back+'<strong>'+o.id+'</strong></span>'+(late(o)?'<span class="pill red">Retraso</span>':'')+'</div><p>'+cust.name+' &middot; '+o.zone+phoneLine+'</p><p>'+items+'</p>'+delivery+'<div class="row"><strong>'+money.format(total(o))+'</strong><span title="Tiempo en curso">'+elapsedLabel(o)+'</span></div><div class="card-actions"><button data-action="advance" data-id="'+o.id+'">'+nextActionLabel(o)+'</button>'+deliveryTrackingButton(o)+'</div>';
+  return e;
+};
+document.body.addEventListener('click',async e=>{
+  const btn=e.target.closest('[data-action="back"]');
+  if(!btn)return;
+  e.preventDefault();
+  e.stopPropagation();
+  await regressOrder(btn.dataset.id);
+},true);
 
 initSupabaseApp();
 </script></body></html>
