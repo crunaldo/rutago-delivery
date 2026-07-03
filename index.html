@@ -819,5 +819,31 @@ render=function(){
 polishDashboardControls();
 applyPaymentMethodsUi();
 
+const sidebarToggleStyle=document.createElement('style');
+sidebarToggleStyle.textContent='.side{position:sticky}.side-toggle{position:absolute;top:22px;right:14px;width:32px;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;display:inline-grid;place-items:center;padding:0}.side-toggle svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.shell.menu-collapsed{grid-template-columns:86px 1fr}.shell.menu-collapsed .side{padding:18px 12px}.shell.menu-collapsed .brand{justify-content:center}.shell.menu-collapsed .brand div:last-child,.shell.menu-collapsed .nav span:last-child,.shell.menu-collapsed .sidefoot>span{display:none}.shell.menu-collapsed .nav button{justify-content:center}.shell.menu-collapsed .side-toggle{right:50%;transform:translateX(50%);top:74px}.shell.menu-collapsed .sidefoot{justify-content:center;padding:12px 8px}.shell.menu-collapsed main{min-width:0}@media(max-width:720px){.side-toggle{display:none}.shell.menu-collapsed{display:block}}';
+document.head.appendChild(sidebarToggleStyle);
+function sidebarToggleIcon(collapsed){
+  return collapsed?'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>':'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>';
+}
+function setSidebarCollapsed(collapsed){
+  const shell=document.querySelector('.shell');
+  shell.classList.toggle('menu-collapsed',collapsed);
+  const btn=document.getElementById('sidebarToggle');
+  if(btn){
+    btn.innerHTML=sidebarToggleIcon(collapsed);
+    btn.setAttribute('aria-expanded',String(!collapsed));
+    btn.title=collapsed?'Expandir menu':'Contraer menu';
+  }
+  localStorage.setItem('rutago-sidebar-collapsed',collapsed?'1':'0');
+}
+function ensureSidebarToggle(){
+  const side=document.querySelector('.side');
+  if(!side||document.getElementById('sidebarToggle'))return;
+  side.insertAdjacentHTML('afterbegin','<button class="side-toggle" id="sidebarToggle" type="button" aria-label="Contraer o expandir menu"></button>');
+  sidebarToggle.onclick=()=>setSidebarCollapsed(!document.querySelector('.shell').classList.contains('menu-collapsed'));
+  setSidebarCollapsed(localStorage.getItem('rutago-sidebar-collapsed')==='1');
+}
+ensureSidebarToggle();
+
 initSupabaseApp();
 </script></body></html>
