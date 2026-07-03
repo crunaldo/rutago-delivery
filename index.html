@@ -567,5 +567,257 @@ openIndriveModal=function(order){
 };
 ensureNoDeliveryButton();
 
+const opsEnhancementStyle=document.createElement('style');
+opsEnhancementStyle.textContent='.dashboard-controls{position:sticky;top:0;z-index:5;margin-bottom:12px;padding:10px 14px}.dashboard-controls:not([open]){display:inline-block}.dashboard-controls summary{display:flex;align-items:center;gap:8px}.danger{border-color:var(--red)!important;background:var(--red)!important;color:#fff!important}.role-config{display:grid;gap:12px}.role-card{border:1px solid var(--line);border-radius:8px;background:#f8faf7;padding:12px}.role-card h3{margin:0 0 10px}.cap-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}.pay-choice{display:grid;gap:10px;margin:10px 0}.pay-methods-list{display:grid;gap:8px}.pay-method-row{display:grid;grid-template-columns:1fr 110px;gap:8px;align-items:center}';
+document.head.appendChild(opsEnhancementStyle);
+
+function paymentMethods(){
+  const list=state.settings.paymentMethods&&state.settings.paymentMethods.length?state.settings.paymentMethods:['Yape','Efectivo','Tarjeta','Transferencia'];
+  return list.map(x=>String(x).trim()).filter(Boolean);
+}
+function methodOptions(selected){
+  return paymentMethods().map(m=>'<option value="'+m+'" '+(m===selected?'selected':'')+'>'+m+'</option>').join('');
+}
+function ensurePaymentMethodsUi(){
+  if(document.getElementById('paymentMethodsConfig'))return;
+  const opPanel=[...document.querySelectorAll('#settingsForm .panel')].find(p=>p.querySelector('#autoRefresh'));
+  if(opPanel)opPanel.insertAdjacentHTML('beforeend','<label class="full">Metodos de pago disponibles<textarea id="paymentMethodsConfig" rows="4" placeholder="Uno por linea"></textarea></label>');
+}
+function applyPaymentMethodsUi(){
+  ensurePaymentMethodsUi();
+  if(window.paymentMethodsConfig)paymentMethodsConfig.value=paymentMethods().join('\n');
+  if(window.oPayment)oPayment.innerHTML=methodOptions(oPayment.value);
+  if(window.cashPaymentMethod)cashPaymentMethod.innerHTML=methodOptions(cashPaymentMethod.value);
+  if(window.dispatchPayMethod)dispatchPayMethod.innerHTML=methodOptions(dispatchPayMethod.value);
+}
+
+const defaultRoleConfig={
+  admin:{label:'Admin',sections:['dashboard','pos','orders','drivers','customers','catalog','reports','users','settings','cash'],capabilities:['orders:create','orders:edit','orders:delete','orders:status','payments:manage','users:manage','settings:manage','products:manage']},
+  caja:{label:'Caja',sections:['dashboard','pos','orders','customers','reports','cash'],capabilities:['orders:create','orders:edit','orders:status','payments:manage']},
+  cocina:{label:'Cocina',sections:['pos','orders'],capabilities:['orders:status']},
+  atencion:{label:'Atencion',sections:['dashboard','pos','orders','drivers','customers','reports'],capabilities:['orders:create','orders:edit','orders:status']}
+};
+function roleConfig(){
+  state.settings.roles={...structuredClone(defaultRoleConfig),...(state.settings.roles||{})};
+  return state.settings.roles;
+}
+function currentRoleConfig(){
+  return roleConfig()[currentProfile?.role]||defaultRoleConfig.admin;
+}
+roleViews=function(){return currentRoleConfig().sections||['dashboard']};
+roleCanView=function(view){return !currentProfile||roleViews().includes(view)};
+function roleCan(cap){return !currentProfile||(currentRoleConfig().capabilities||[]).includes(cap)}
+roleCanCreateOrder=function(){return roleCan('orders:create')};
+if(typeof roleCanManageProducts==='function'){
+  roleCanManageProducts=function(){return roleCan('products:manage')};
+}
+function ensureRoleManager(){
+  const panel=document.getElementById('userAdminPanel');
+  if(!panel||document.getElementById('roleManager'))return;
+  panel.insertAdjacentHTML('beforeend','<section class="panel" id="roleManager" style="box-shadow:none;margin-top:12px"><div class="head compact"><h2>Roles y permisos</h2><button class="btn" id="addRoleBtn" type="button">Crear rol</button></div><p class="muted">Define que secciones ve cada rol y que acciones puede ejecutar.</p><div id="roleCards" class="role-config"></div></section>');
+}
+function renderRoleManager(){
+  ensureRoleManager();
+  const box=document.getElementById('roleCards');
+  if(!box)return;
+  const views=(state.settings.menu||[]).map(m=>m.view).filter(Boolean);
+  const caps=[['orders:create','Crear pedidos'],['orders:edit','Editar pedidos'],['orders:delete','Eliminar pedidos'],['orders:status','Cambiar estados'],['payments:manage','Gestionar pagos'],['products:manage','Gestionar productos'],['users:manage','Gestionar usuarios'],['settings:manage','Gestionar ajustes']];
+  const roles=roleConfig();
+  box.innerHTML=Object.entries(roles).map(([key,role])=>'<article class="role-card" data-role-card="'+key+'"><h3>'+role.label+' <span class="muted">('+key+')</span></h3><label>Nombre del rol<input data-role-label="'+key+'" value="'+role.label+'"></label><strong>Secciones visibles</strong><div class="cap-grid">'+views.map(v=>'<label class="check"><input type="checkbox" data-role-section="'+key+'" value="'+v+'" '+((role.sections||[]).includes(v)?'checked':'')+'>'+((state.settings.menu||[]).find(m=>m.view===v)?.label||v)+'</label>').join('')+'</div><strong>Capacidades</strong><div class="cap-grid">'+caps.map(c=>'<label class="check"><input type="checkbox" data-role-cap="'+key+'" value="'+c[0]+'" '+((role.capabilities||[]).includes(c[0])?'checked':'')+'>'+c[1]+'</label>').join('')+'</div><button class="btn primary" data-save-role="'+key+'" type="button">Guardar rol</button></article>').join('');
+}
+
+function ensureDispatchPaymentDialog(){
+  if(document.getElementById('dispatchPaymentDialog'))return;
+  document.body.insertAdjacentHTML('beforeend','<dialog id="dispatchPaymentDialog"><form method="dialog" class="modal" id="dispatchPaymentForm"><div class="modalHead"><h2>Pago del pedido</h2><button class="icon small" type="button" data-close-dialog="dispatchPaymentDialog" title="Cerrar">x</button></div><p class="muted" id="dispatchPaymentText">Antes de pasar a despacho confirma si el cliente ya pago.</p><div class="pay-choice"><label class="check"><input type="radio" name="dispatchPaid" value="no" checked>No, queda pendiente</label><label class="check"><input type="radio" name="dispatchPaid" value="yes">Si, registrar pago ahora</label></div><div class="formgrid" id="dispatchPaymentFields" style="display:none"><label>Metodo<select id="dispatchPayMethod"></select></label><label>Monto<input id="dispatchPayAmount" type="number" min="0" step="0.01"></label><label class="full">Nro. de referencia<input id="dispatchPayRef" placeholder="Codigo, voucher o nota"></label></div><menu><button class="btn" type="button" data-close-dialog="dispatchPaymentDialog">Cancelar</button><button class="btn primary" value="default">Confirmar despacho</button></menu></form></dialog>');
+  dispatchPaymentForm.addEventListener('change',e=>{if(e.target.name==='dispatchPaid')dispatchPaymentFields.style.display=e.target.value==='yes'?'grid':'none'});
+  dispatchPaymentForm.addEventListener('submit',confirmDispatchPayment);
+  document.querySelectorAll('[data-close-dialog="dispatchPaymentDialog"]').forEach(b=>b.onclick=()=>dispatchPaymentDialog.close());
+}
+let pendingDispatchOrderId='';
+function openDispatchPaymentModal(order){
+  ensureDispatchPaymentDialog();
+  pendingDispatchOrderId=order.id;
+  dispatchPaymentText.textContent='Pedido '+order.id+' · '+c(order).name+'. Confirma si ya realizo el pago antes de enviarlo a despacho.';
+  dispatchPaymentForm.reset();
+  dispatchPaymentFields.style.display='none';
+  dispatchPayMethod.innerHTML=methodOptions(order.payment);
+  dispatchPayAmount.value=total(order).toFixed(2);
+  dispatchPaymentDialog.showModal();
+}
+async function registerPaymentForOrder(order,method,amount,reference){
+  if(dbReady()){
+    const payment=(await sbThrow(sb.from('payments').insert({order_id:order._dbId,amount,method,status:'received',reference,received_by:currentProfile.id}).select()))[0];
+    if(cashSession)await sbThrow(sb.from('cash_movements').insert({cash_session_id:cashSession.id,type:'income',amount,method,description:'Pago '+order.id,payment_id:payment.id,created_by:currentProfile.id}));
+    await sbThrow(sb.from('orders').update({payment_status:'paid',payment_method:method,updated_by:currentProfile.id}).eq('id',order._dbId));
+  }else{
+    remoteRows.payments=remoteRows.payments||[];
+    remoteRows.payments.unshift({id:uid('pay'),order_id:order._dbId||order.id,amount,method,status:'received',reference,received_at:new Date().toISOString()});
+    order.payment=method;
+    order.paymentStatus='paid';
+    save();
+  }
+}
+async function confirmDispatchPayment(e){
+  e.preventDefault();
+  const order=state.orders.find(o=>o.id===pendingDispatchOrderId);
+  if(!order)return;
+  const paid=[...document.querySelectorAll('[name="dispatchPaid"]')].find(x=>x.checked)?.value==='yes';
+  try{
+    if(paid){
+      const amount=Number(dispatchPayAmount.value||0);
+      if(!amount){toast('Monto invalido');return}
+      await registerPaymentForOrder(order,dispatchPayMethod.value,amount,dispatchPayRef.value.trim());
+    }
+    await updateOrderStatusNoPrompt(order,'ready',paid?'Pago registrado al pasar a despacho':'Despacho con pago pendiente');
+    pendingDispatchOrderId='';
+    dispatchPaymentDialog.close();
+    if(dbReady())await loadRemoteDataAndRender();else render();
+    toast(paid?'Pago registrado y pedido en despacho':'Pedido en despacho con pago pendiente');
+  }catch(err){
+    console.error(err);
+    toast(err.message||'No se pudo pasar a despacho');
+  }
+}
+
+async function deleteCurrentOrder(){
+  const o=state.orders.find(x=>x.id===editingOrderId);
+  if(!o)return;
+  if(!roleCan('orders:delete')){toast('No tienes permiso para eliminar pedidos');return}
+  if(!confirm('Eliminar definitivamente el pedido '+o.id+'? Esta accion descontara el pedido de reportes, caja y cola.'))return;
+  try{
+    if(dbReady()){
+      const orderPayments=await sbThrow(sb.from('payments').select('id').eq('order_id',o._dbId));
+      const paymentIds=orderPayments.map(p=>p.id);
+      if(paymentIds.length)await sbThrow(sb.from('cash_movements').delete().in('payment_id',paymentIds));
+      await sbThrow(sb.from('payments').delete().eq('order_id',o._dbId));
+      await sbThrow(sb.from('order_events').delete().eq('order_id',o._dbId));
+      await sbThrow(sb.from('indrive_deliveries').delete().eq('order_id',o._dbId));
+      await sbThrow(sb.from('order_items').delete().eq('order_id',o._dbId));
+      await sbThrow(sb.from('orders').delete().eq('id',o._dbId));
+      dialog.close();
+      await loadRemoteDataAndRender();
+    }else{
+      state.orders=state.orders.filter(x=>x.id!==o.id);
+      remoteRows.payments=(remoteRows.payments||[]).filter(p=>p.order_id!==o.id&&p.order_id!==o._dbId);
+      dialog.close();
+      save();
+      render();
+    }
+    toast('Pedido '+o.id+' eliminado');
+  }catch(err){
+    console.error(err);
+    toast(err.message||'No se pudo eliminar el pedido');
+  }
+}
+function ensureDeleteOrderButton(){
+  const menu=orderForm.querySelector('menu');
+  if(!menu||document.getElementById('deleteOrderBtn'))return;
+  menu.insertAdjacentHTML('afterbegin','<button class="btn danger" id="deleteOrderBtn" type="button">Eliminar pedido</button>');
+  deleteOrderBtn.onclick=deleteCurrentOrder;
+}
+function refreshDeleteOrderButton(){
+  ensureDeleteOrderButton();
+  if(window.deleteOrderBtn)deleteOrderBtn.style.display=editingOrderId?'inline-flex':'none';
+}
+
+const originalAdvanceForDispatch=advance;
+advance=async function(id){
+  const o=state.orders.find(x=>x.id===id);
+  if(o&&o.status==='received'){
+    openDispatchPaymentModal(o);
+    return;
+  }
+  return originalAdvanceForDispatch(id);
+};
+const originalOpenDialogForDelete=openDialog;
+openDialog=function(){
+  originalOpenDialogForDelete();
+  refreshDeleteOrderButton();
+  applyPaymentMethodsUi();
+};
+const originalEditOrderForDelete=editOrder;
+editOrder=function(id){
+  originalEditOrderForDelete(id);
+  refreshDeleteOrderButton();
+  applyPaymentMethodsUi();
+};
+
+const originalTableWithPayment=table;
+table=function(){
+  const head=document.querySelector('#orders table thead tr');
+  if(head&&!head.querySelector('[data-pay-head]'))head.children[4].insertAdjacentHTML('beforebegin','<th data-pay-head>Metodo de pago</th>');
+  const body=document.getElementById('ordersBody');
+  const list=visibleOrdersForTable();
+  const page=paged('orders',list,15);
+  ensurePager('ordersPager',document.querySelector('#orders .tablewrap'));
+  body.innerHTML='';
+  if(!list.length){emptyRow(body,9,'No hay pedidos para los filtros seleccionados.');renderPager('ordersPager','orders',page);return}
+  page.items.forEach(o=>{
+    body.insertAdjacentHTML('beforeend','<tr data-order="'+o.id+'"><td><strong>'+o.id+'</strong><br><span class="muted">'+o.channel+'</span></td><td>'+c(o).name+'<br><span class="muted">'+c(o).phone+'</span></td><td>'+o.zone+'</td><td><span class="pill '+(late(o)?'red':meta[o.status].color)+'">'+(late(o)?'Retraso':meta[o.status].label)+'</span></td><td>'+o.payment+'</td><td>'+(o.indrive?('InDrive: '+o.indrive.name+'<br><span class="muted">'+o.indrive.plate+(o.indrive.tracking?' · seguimiento':'')+'</span>'):'Sin InDrive')+'</td><td>'+money.format(total(o))+'</td><td>'+elapsedLabel(o)+'</td><td><button class="btn" data-action="advance" data-id="'+o.id+'">'+nextActionLabel(o)+'</button></td></tr>');
+  });
+  renderPager('ordersPager','orders',page);
+};
+
+const originalRenderUsersForRoles=renderUsersPanel;
+renderUsersPanel=function(){
+  originalRenderUsersForRoles();
+  renderRoleManager();
+};
+document.body.addEventListener('click',e=>{
+  const add=e.target.closest('#addRoleBtn');
+  if(add){
+    const key=(prompt('Clave del nuevo rol, sin espacios')||'').trim().toLowerCase();
+    if(!key)return;
+    if(roleConfig()[key]){toast('Ese rol ya existe');return}
+    state.settings.roles[key]={label:key,sections:['dashboard'],capabilities:[]};
+    save();
+    renderRoleManager();
+    return;
+  }
+  const btn=e.target.closest('[data-save-role]');
+  if(!btn)return;
+  const key=btn.dataset.saveRole;
+  const roles=roleConfig();
+  roles[key]={label:document.querySelector('[data-role-label="'+key+'"]').value.trim()||key,sections:[...document.querySelectorAll('[data-role-section="'+key+'"]:checked')].map(x=>x.value),capabilities:[...document.querySelectorAll('[data-role-cap="'+key+'"]:checked')].map(x=>x.value)};
+  state.settings.roles=roles;
+  save();
+  renderMenu();
+  toast('Rol actualizado');
+});
+
+const originalSaveRemoteSettingsWithPay=saveRemoteSettings;
+saveRemoteSettings=async function(){
+  const methods=paymentMethods();
+  const roles=roleConfig();
+  state.settings.paymentMethods=methods;
+  state.settings.roles=roles;
+  const store={shopName:state.settings.shopName,brandSubtitle:state.settings.brandSubtitle,logoText:state.settings.logoText,logoUrl:state.settings.logoUrl,orderPrefix:state.settings.orderPrefix,targetTime:state.settings.targetTime,baseFee:state.settings.baseFee,delayLimit:state.settings.delayLimit,defaultZone:state.settings.defaultZone,currency:state.settings.currency,showMap:state.settings.showMap,theme:state.settings.theme,menu:state.settings.menu,channels:state.settings.channels,paymentMethods:methods,roles};
+  await sbThrow(sb.from('app_settings').upsert([{key:'store',value:store,updated_by:currentProfile.id},{key:'templates',value:state.settings.templates,updated_by:currentProfile.id}],{onConflict:'key'}));
+  for(let i=0;i<zoneNames.length;i++)await sbThrow(sb.from('zones').upsert({name:zoneNames[i],sort_order:i+1,active:true},{onConflict:'name'}));
+};
+const previousSettingsSubmitForMethods=settingsForm.onsubmit;
+settingsForm.onsubmit=async function(e){
+  if(window.paymentMethodsConfig)state.settings.paymentMethods=paymentMethodsConfig.value.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!state.settings.paymentMethods.length)state.settings.paymentMethods=['Yape','Efectivo','Tarjeta','Transferencia'];
+  await previousSettingsSubmitForMethods(e);
+  applyPaymentMethodsUi();
+};
+
+function polishDashboardControls(){
+  const controls=document.querySelector('.dashboard-controls');
+  if(controls)controls.open=false;
+  const h=[...document.querySelectorAll('[data-dash-widget="dashCustomers"] h2')][0];
+  if(h)h.textContent='Clientes Top';
+}
+const originalRenderForOpsEnhancements=render;
+render=function(){
+  originalRenderForOpsEnhancements();
+  polishDashboardControls();
+  applyPaymentMethodsUi();
+  refreshDeleteOrderButton();
+};
+polishDashboardControls();
+applyPaymentMethodsUi();
+
 initSupabaseApp();
 </script></body></html>
