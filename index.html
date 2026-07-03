@@ -578,6 +578,11 @@ function paymentMethods(){
 function methodOptions(selected){
   return paymentMethods().map(m=>'<option value="'+m+'" '+(m===selected?'selected':'')+'>'+m+'</option>').join('');
 }
+function paymentMethodCode(method){
+  const raw=String(method||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const known={efectivo:'efectivo',cash:'efectivo',yape:'yape',tarjeta:'tarjeta',card:'tarjeta',transferencia:'transferencia',transfer:'transferencia',banco:'transferencia',otro:'otro'};
+  return known[raw]||'otro';
+}
 function ensurePaymentMethodsUi(){
   if(document.getElementById('paymentMethodsConfig'))return;
   const opPanel=[...document.querySelectorAll('#settingsForm .panel')].find(p=>p.querySelector('#autoRefresh'));
@@ -645,13 +650,14 @@ function openDispatchPaymentModal(order){
   dispatchPaymentDialog.showModal();
 }
 async function registerPaymentForOrder(order,method,amount,reference){
+  const methodCode=paymentMethodCode(method);
   if(dbReady()){
-    const payment=(await sbThrow(sb.from('payments').insert({order_id:order._dbId,amount,method,status:'received',reference,received_by:currentProfile.id}).select()))[0];
-    if(cashSession)await sbThrow(sb.from('cash_movements').insert({cash_session_id:cashSession.id,type:'income',amount,method,description:'Pago '+order.id,payment_id:payment.id,created_by:currentProfile.id}));
+    const payment=(await sbThrow(sb.from('payments').insert({order_id:order._dbId,amount,method:methodCode,status:'received',reference,received_by:currentProfile.id}).select()))[0];
+    if(cashSession)await sbThrow(sb.from('cash_movements').insert({cash_session_id:cashSession.id,type:'income',amount,method:methodCode,description:'Pago '+order.id,payment_id:payment.id,created_by:currentProfile.id}));
     await sbThrow(sb.from('orders').update({payment_status:'paid',payment_method:method,updated_by:currentProfile.id}).eq('id',order._dbId));
   }else{
     remoteRows.payments=remoteRows.payments||[];
-    remoteRows.payments.unshift({id:uid('pay'),order_id:order._dbId||order.id,amount,method,status:'received',reference,received_at:new Date().toISOString()});
+    remoteRows.payments.unshift({id:uid('pay'),order_id:order._dbId||order.id,amount,method:methodCode,status:'received',reference,received_at:new Date().toISOString()});
     order.payment=method;
     order.paymentStatus='paid';
     save();
@@ -802,6 +808,28 @@ settingsForm.onsubmit=async function(e){
   await previousSettingsSubmitForMethods(e);
   applyPaymentMethodsUi();
 };
+document.body.addEventListener('submit',async e=>{
+  if(e.target?.id!=='cashPaymentForm')return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if(!dbReady()||!requireRole(['caja']))return;
+  try{
+    const orderId=cashOrderSelect.value;
+    if(!orderId){toast('No hay pedido seleccionado');return}
+    const amount=Number(cashPaymentAmount.value||0);
+    if(!amount){toast('Monto invalido');return}
+    const methodCode=paymentMethodCode(cashPaymentMethod.value);
+    const payment=(await sbThrow(sb.from('payments').insert({order_id:orderId,amount,method:methodCode,status:'received',reference:cashPaymentRef.value.trim(),received_by:currentProfile.id}).select()))[0];
+    if(cashSession)await sbThrow(sb.from('cash_movements').insert({cash_session_id:cashSession.id,type:'income',amount,method:methodCode,description:'Pago de pedido',payment_id:payment.id,created_by:currentProfile.id}));
+    await sbThrow(sb.from('orders').update({payment_status:'paid',payment_method:cashPaymentMethod.value,updated_by:currentProfile.id}).eq('id',orderId));
+    e.target.reset();
+    await loadRemoteDataAndRender();
+    toast('Pago registrado');
+  }catch(err){
+    console.error(err);
+    toast(err.message||'No se pudo registrar pago');
+  }
+},true);
 
 function polishDashboardControls(){
   const controls=document.querySelector('.dashboard-controls');
