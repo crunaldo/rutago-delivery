@@ -873,5 +873,111 @@ function ensureSidebarToggle(){
 }
 ensureSidebarToggle();
 
+const kitchenNotifyStyle=document.createElement('style');
+kitchenNotifyStyle.textContent='.kitchen-alerts{display:none;margin-bottom:14px;align-items:center;justify-content:space-between;gap:12px}.kitchen-alerts.show{display:flex}.kitchen-alerts .muted{margin:0}.kitchen-alerts .btn{height:36px}@media(max-width:720px){.kitchen-alerts.show{display:grid}}';
+document.head.appendChild(kitchenNotifyStyle);
+let kitchenDispatchKnown=null,kitchenAudioUnlocked=false;
+function isKitchenRole(){
+  return currentProfile?.role==='cocina'||currentRoleConfig()?.capabilities?.includes('kitchen:notify');
+}
+function ensureKitchenAlertPanel(){
+  const pos=document.getElementById('pos');
+  if(!pos||document.getElementById('kitchenAlerts'))return;
+  pos.insertAdjacentHTML('afterbegin','<section class="panel kitchen-alerts" id="kitchenAlerts"><div><strong>Alertas de cocina</strong><p class="muted" id="kitchenAlertStatus">Activa las notificaciones para recibir avisos de nuevos pedidos en despacho.</p></div><button class="btn primary" id="enableKitchenAlerts" type="button">Activar alertas</button></section>');
+  enableKitchenAlerts.onclick=enableKitchenNotifications;
+}
+async function enableKitchenNotifications(){
+  try{
+    await unlockKitchenAudio();
+    if('Notification' in window&&Notification.permission==='default')await Notification.requestPermission();
+    updateKitchenAlertPanel();
+    const permission=('Notification' in window)?Notification.permission:'unsupported';
+    toast(permission==='granted'?'Alertas de cocina activas':'Activa las notificaciones del navegador para recibir avisos');
+  }catch(err){
+    console.error(err);
+    toast('No se pudieron activar las alertas');
+  }
+}
+function updateKitchenAlertPanel(){
+  ensureKitchenAlertPanel();
+  const box=document.getElementById('kitchenAlerts');
+  if(!box)return;
+  const visible=isKitchenRole()&&currentView==='pos';
+  box.classList.toggle('show',visible);
+  if(!visible)return;
+  const permission=('Notification' in window)?Notification.permission:'unsupported';
+  kitchenAlertStatus.textContent=permission==='granted'?'Notificaciones activas. Sonara una alerta cuando llegue un pedido a despacho.':permission==='denied'?'Notificaciones bloqueadas en el navegador. Puedes habilitarlas desde los permisos del sitio.':'Activa las notificaciones para recibir avisos de nuevos pedidos en despacho.';
+  enableKitchenAlerts.style.display=permission==='granted'?'none':'inline-flex';
+}
+async function unlockKitchenAudio(){
+  if(kitchenAudioUnlocked)return;
+  playKitchenSound(true);
+  kitchenAudioUnlocked=true;
+}
+function playKitchenSound(quiet=false){
+  try{
+    const AudioContext=window.AudioContext||window.webkitAudioContext;
+    if(!AudioContext)return;
+    const ctx=new AudioContext();
+    const gain=ctx.createGain();
+    gain.gain.value=quiet?0.001:0.12;
+    gain.connect(ctx.destination);
+    [0,180,360].forEach((delay,i)=>{
+      const osc=ctx.createOscillator();
+      osc.type='sine';
+      osc.frequency.value=i===1?980:760;
+      osc.connect(gain);
+      osc.start(ctx.currentTime+delay/1000);
+      osc.stop(ctx.currentTime+delay/1000+0.12);
+    });
+    setTimeout(()=>ctx.close(),900);
+  }catch(err){}
+}
+function notifyKitchenOrder(order){
+  playKitchenSound();
+  const customer=c(order);
+  const body=customer.name+' · '+order.zone+' · '+money.format(total(order));
+  if('Notification' in window&&Notification.permission==='granted'){
+    new Notification('Nuevo pedido en despacho',{body,tag:'dispatch-'+order.id,renotify:true});
+  }
+  toast('Nuevo pedido en despacho: '+order.id);
+}
+function scanKitchenDispatchOrders(silent=false){
+  if(!isKitchenRole())return;
+  const ready=state.orders.filter(o=>o.status==='ready'&&isTodayOrder(o));
+  const ids=new Set(ready.map(o=>o.id));
+  if(kitchenDispatchKnown==null){
+    kitchenDispatchKnown=ids;
+    return;
+  }
+  const fresh=ready.filter(o=>!kitchenDispatchKnown.has(o.id));
+  kitchenDispatchKnown=ids;
+  if(!silent)fresh.forEach(notifyKitchenOrder);
+}
+const originalBootRemoteForKitchen=bootRemote;
+bootRemote=async function(){
+  await originalBootRemoteForKitchen();
+  scanKitchenDispatchOrders(true);
+  updateKitchenAlertPanel();
+};
+const originalLoadRemoteDataAndRenderForKitchen=loadRemoteDataAndRender;
+loadRemoteDataAndRender=async function(){
+  await originalLoadRemoteDataAndRenderForKitchen();
+  scanKitchenDispatchOrders(false);
+  updateKitchenAlertPanel();
+};
+const originalRenderForKitchen=render;
+render=function(){
+  originalRenderForKitchen();
+  updateKitchenAlertPanel();
+};
+const originalSetViewForKitchen=setView;
+setView=function(v){
+  originalSetViewForKitchen(v);
+  updateKitchenAlertPanel();
+  if(currentView==='pos'&&isKitchenRole())scanKitchenDispatchOrders(true);
+};
+document.addEventListener('click',()=>{if(isKitchenRole())unlockKitchenAudio()},{once:true});
+
 initSupabaseApp();
 </script></body></html>
