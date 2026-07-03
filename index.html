@@ -539,5 +539,33 @@ renderMenu=function(){
 };
 renderMenuWithSvgIcons();
 
+async function confirmWithoutDelivery(){
+  const o=state.orders.find(function(x){return x.id===pendingRouteOrderId});
+  if(o==null){indriveDialog.close();return}
+  try{
+    await updateOrderStatusNoPrompt(o,'route','En camino sin delivery');
+    indriveDialog.close();
+    pendingRouteOrderId='';
+    toast('Pedido '+o.id+' en camino sin delivery registrado');
+  }catch(err){
+    console.error(err);
+    toast(err.message?err.message:'No se pudo actualizar el pedido');
+  }
+}
+function ensureNoDeliveryButton(){
+  const whatsappButton=document.getElementById('confirmIndriveWhatsapp');
+  if(whatsappButton&&document.getElementById('noDeliveryIndrive')==null){
+    whatsappButton.insertAdjacentHTML('beforebegin','<button class="btn" type="button" id="noDeliveryIndrive">No agregar delivery</button>');
+  }
+  const button=document.getElementById('noDeliveryIndrive');
+  if(button)button.onclick=confirmWithoutDelivery;
+}
+const openIndriveModalWithNoDelivery=openIndriveModal;
+openIndriveModal=function(order){
+  openIndriveModalWithNoDelivery(order);
+  ensureNoDeliveryButton();
+};
+ensureNoDeliveryButton();
+
 initSupabaseApp();
 </script></body></html>
