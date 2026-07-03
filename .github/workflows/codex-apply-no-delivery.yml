@@ -1,0 +1,78 @@
+name: Codex apply no delivery button
+
+on:
+  push:
+    paths:
+      - .github/workflows/codex-apply-no-delivery.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch index.html
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('index.html')
+          text = path.read_text(encoding='utf-8')
+          block = """async function confirmWithoutDelivery(){
+  const o=state.orders.find(function(x){return x.id===pendingRouteOrderId});
+  if(o==null){indriveDialog.close();return}
+  try{
+    await updateOrderStatusNoPrompt(o,'route','En camino sin delivery');
+    indriveDialog.close();
+    pendingRouteOrderId='';
+    toast('Pedido '+o.id+' en camino sin delivery registrado');
+  }catch(err){
+    console.error(err);
+    toast(err.message?err.message:'No se pudo actualizar el pedido');
+  }
+}
+function ensureNoDeliveryButton(){
+  const whatsappButton=document.getElementById('confirmIndriveWhatsapp');
+  if(whatsappButton){
+    if(document.getElementById('noDeliveryIndrive')==null){
+      whatsappButton.insertAdjacentHTML('beforebegin','<button class="btn" type="button" id="noDeliveryIndrive">No agregar delivery</button>');
+    }
+  }
+  const button=document.getElementById('noDeliveryIndrive');
+  if(button)button.onclick=confirmWithoutDelivery;
+}
+const openIndriveModalWithNoDelivery=openIndriveModal;
+openIndriveModal=function(order){
+  openIndriveModalWithNoDelivery(order);
+  ensureNoDeliveryButton();
+};
+ensureNoDeliveryButton();
+"""
+          marker = "\ninitSupabaseApp();"
+          changed = False
+          if 'noDeliveryIndrive' not in text:
+              if marker not in text:
+                  raise SystemExit('Marker not found')
+              text = text.replace(marker, "\n" + block + marker, 1)
+              path.write_text(text, encoding='utf-8')
+              changed = True
+          workflow = Path('.github/workflows/codex-apply-no-delivery.yml')
+          if workflow.exists():
+              workflow.unlink()
+              changed = True
+          if not changed:
+              print('No changes needed')
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "codex"
+          git config user.email "codex@users.noreply.github.com"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add index.html .github/workflows/codex-apply-no-delivery.yml
+            git commit -m "Add no-delivery option to InDrive modal"
+            git push
+          else
+            echo "No changes to commit"
+          fi
